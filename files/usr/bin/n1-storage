@@ -1,0 +1,127 @@
+#!/bin/sh
+# 斐讯 N1 存储辅助脚本：硬盘识别、Docker 数据目录、USB 硬盘盒兼容性
+
+MOVIE_DIR=/mnt/movie
+
+usage() {
+	cat <<'EOF'
+用法: n1-storage <命令>
+
+  status                 查看硬盘识别情况、挂载点、Docker 数据目录
+  docker-on-disk         把 Docker 数据目录切到移动硬盘（要求 /mnt/movie 已挂载）
+  usb-quirks VID:PID     为指定硬盘盒禁用 UAS，回退 usb-storage(BOT) 模式
+                         例：n1-storage usb-quirks 152d:0578
+EOF
+}
+
+is_mounted() {
+	grep -qs " $1 " /proc/mounts
+}
+
+cmd_status() {
+	echo "== USB 设备"
+	if command -v lsusb >/dev/null 2>&1; then
+		lsusb
+	else
+		echo "lsusb 不可用"
+	fi
+
+	echo
+	echo "== USB 驱动拓扑（出现 Driver=uas 即为 UAS 模式）"
+	if [ -r /sys/kernel/debug/usb/devices ]; then
+		echo "（需要 debugfs，已跳过）"
+	fi
+	ls -l /sys/bus/usb/drivers/uas 2>/dev/null | head -5
+
+	echo
+	echo "== 块设备"
+	blkid 2>/dev/null || true
+
+	echo
+	echo "== 挂载点 ${MOVIE_DIR}"
+	if is_mounted "${MOVIE_DIR}"; then
+		grep " ${MOVIE_DIR} " /proc/mounts
+	else
+		echo "未挂载"
+	fi
+
+	echo
+	echo "== 文件系统支持"
+	for fs in ntfs3 exfat vfat ext4; do
+		if grep -qw "${fs}" /proc/filesystems; then
+			echo "  ${fs}: 可用"
+		else
+			echo "  ${fs}: 不可用"
+		fi
+	done
+
+	echo
+	echo "== Docker 数据目录"
+	if [ -f /etc/config/dockerd ]; then
+		uci -q get dockerd.globals.data_root || echo "  (未设置，默认 /opt/docker)"
+	else
+		echo "  dockerd 未安装"
+	fi
+}
+
+cmd_docker_on_disk() {
+	if ! is_mounted "${MOVIE_DIR}"; then
+		echo "错误：${MOVIE_DIR} 未挂载，先把硬盘挂到这里再执行。" >&2
+		echo "提示：LuCI → 系统 → 挂载点，把分区挂载到 ${MOVIE_DIR} 并启用。" >&2
+		exit 1
+	fi
+	if [ ! -f /etc/config/dockerd ]; then
+		echo "错误：dockerd 未安装。" >&2
+		exit 1
+	fi
+
+	old_root="$(uci -q get dockerd.globals.data_root)"
+	[ -n "${old_root}" ] || old_root=/opt/docker
+	new_root="${MOVIE_DIR}/docker"
+
+	if [ "${old_root}" = "${new_root}" ]; then
+		echo "Docker 数据目录已经是 ${new_root}，无需修改。"
+		exit 0
+	fi
+
+	echo "停止 Docker..."
+	/etc/init.d/dockerd stop 2>/dev/null || true
+
+	mkdir -p "${new_root}"
+	if [ -d "${old_root}" ] && [ -n "$(ls -A "${old_root}" 2>/dev/null)" ]; then
+		echo "迁移 ${old_root} → ${new_root} ..."
+		mv -f "${old_root}"/* "${new_root}/" 2>/dev/null || true
+		mv -f "${old_root}"/.[!.]* "${new_root}/" 2>/dev/null || true
+	fi
+
+	uci set dockerd.globals.data_root="${new_root}"
+	uci commit dockerd
+
+	echo "启动 Docker..."
+	/etc/init.d/dockerd start 2>/dev/null || true
+	echo "完成：$(uci -q get dockerd.globals.data_root)"
+	echo "注意：新数据目录依赖硬盘挂载，硬盘未插时 Docker 不会启动。"
+}
+
+cmd_usb_quirks() {
+	[ -n "$1" ] || { echo "错误：需要提供 VID:PID，例如 152d:0578" >&2; exit 1; }
+	case "$1" in
+		*:*) ;;
+		*) echo "错误：格式应为 VID:PID，例如 152d:0578" >&2; exit 1 ;;
+	esac
+
+	conf=/etc/modprobe.d/99-n1-usb-quirks.conf
+	mkdir -p /etc/modprobe.d
+	printf 'options usb-storage quirks=%s:u\n' "$1" > "${conf}"
+	echo "已写入 ${conf}："
+	cat "${conf}"
+	echo
+	echo "重启后生效（reboot）。若已不需要，删除该文件即可恢复。"
+}
+
+case "$1" in
+	status) cmd_status ;;
+	docker-on-disk) cmd_docker_on_disk ;;
+	usb-quirks) shift; cmd_usb_quirks "$1" ;;
+	*) usage; exit 1 ;;
+esac

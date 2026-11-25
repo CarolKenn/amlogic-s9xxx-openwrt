@@ -1,0 +1,6 @@
+# 仓库里的脚本和配置会被直接拷进固件，必须是 LF；
+# 在 Windows 上 checkout（core.autocrlf=true）时尤其要注意
+files/** text eol=lf
+config/**/*.sh text eol=lf
+config/**/config text eol=lf
+.github/workflows/*.yml text eol=lf

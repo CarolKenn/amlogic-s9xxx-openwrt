@@ -1,0 +1,16 @@
+#!/bin/sh
+
+[ -n "$IPKG_INSTROOT" ] && exit 0
+
+# 移动硬盘统一挂到这里，samba 共享 /mnt/movie，电视端直接拉片。
+# 先用 0777 保证电视/手机以 guest 身份也能读，之后可在 LuCI 里收紧。
+mkdir -p /mnt/movie
+chmod 0777 /mnt/movie
+
+for svc in samba4 wsdd2; do
+	[ -x "/etc/init.d/${svc}" ] && /etc/init.d/${svc} enable
+done
+
+# Docker 数据目录默认留在 eMMC（约剩 3~4G）。
+# 插上硬盘并挂载到 /mnt/movie 后，执行 `n1-storage docker-on-disk` 再切过去。
+exit 0

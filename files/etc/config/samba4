@@ -1,0 +1,16 @@
+config samba
+	option workgroup 'WORKGROUP'
+	option homes '0'
+	option name 'ImmortalWrt-N1'
+	option description 'ImmortalWrt-N1'
+	option interface 'lan'
+	option macos '1'
+	option disable_netbios '0'
+
+config sambashare
+	option name 'movie'
+	option path '/mnt/movie'
+	option read_only 'no'
+	option guest_ok 'yes'
+	option create_mask '0666'
+	option dir_mask '0777'

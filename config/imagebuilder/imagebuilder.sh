@@ -286,10 +286,16 @@ rebuild_firmware() {
         "
 
     # Rebuild firmware
-    # 23.05.x 的 ImageBuilder 前置检查会把 staging_dir 里的 BusyBox install
-    # 当成 GNU install。image 目标内部会 `unset MAKEFLAGS` 再起子 make，
-    # 所以必须导出成环境变量 FORCE=1 才能传进子 make；写在 make 参数里无效。
-    FORCE=1 make image PROFILE="" PACKAGES="${my_packages}" FILES="files"
+    # 23.05.x ImageBuilder 的 Makefile 里 _call_image 对 staging_dir/host/.prereq-build
+    # 是硬依赖，FORCE=1 只能影响 toplevel.mk 里 .config 的依赖，绕不过它。
+    # 该依赖里的 prereq-build.mk 只是探测 host 工具；ubuntu-26.04 runner 上
+    # staging_dir/host/bin/install -> /usr/bin/install 被判成非 GNU install 而误报失败。
+    # 这个 ImageBuilder 不带 include/prepare.mk，所以把标记文件设为比依赖更新，
+    # 让 make 跳过这段纯探测即可（不改动任何编译产物）。
+    mkdir -p tmp staging_dir/host
+    touch staging_dir/host/.prereq-build
+
+    make image PROFILE="" PACKAGES="${my_packages}" FILES="files"
     [[ "${?}" -eq 0 ]] || error_msg "ImageBuilder make image failed."
 
     sync && sleep 3

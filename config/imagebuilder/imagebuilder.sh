@@ -143,16 +143,49 @@ custom_packages() {
     cd packages
 
     # Download luci-app-amlogic
-    amlogic_api="https://api.github.com/repos/ophub/luci-app-amlogic/releases"
-    # Get the latest release version
-    amlogic_plugin_latest_version="$(curl -s ${amlogic_api} | grep -oP '(?<="tag_name": ")[^"]+' | grep "\-js$" | sort -Vur | head -n1)"
-    # Get the download URLs for the latest release assets (ipk or apk files)
-    amlogic_plugin_list=($(curl -s ${amlogic_api} | grep "browser_download_url" | grep -oE "https.*/${amlogic_plugin_latest_version}/.*\.(ipk|apk)"))
+    # 原实现用 curl -s（不检查 HTTP 错误）+ grep -oP 解析 tag：GitHub API 偶发
+    # 限流/网络抖动时 tag 解析为空，整个 ipk 列表就是空的，但脚本继续往下走，
+    # 最后 opkg 报 "Unknown package 'luci-app-amlogic'"，排查起来很绕。
+    # 这里改成：带重试地取 API，用 python 精确解析，下载后强制校验 ipk 数量。
+    amlogic_api="https://api.github.com/repos/ophub/luci-app-amlogic/releases?per_page=10"
+    amlogic_json=""
+    for retry in 1 2 3; do
+        amlogic_json="$(curl -fsSL --retry 2 --retry-delay 3 --max-time 60 "${amlogic_api}" 2>/dev/null)"
+        [[ -n "${amlogic_json}" ]] && break
+        echo -e "${WARNING} Fetch amlogic releases failed (attempt ${retry}/3), retrying..."
+        sleep 5
+    done
+    [[ -n "${amlogic_json}" ]] || error_msg "Cannot fetch ophub/luci-app-amlogic releases from GitHub API."
+
+    # 取 tag 以 -js 结尾的最新 release，列出它的 ipk/apk 下载地址
+    amlogic_plugin_list=($(printf '%s' "${amlogic_json}" | python3 -c '
+import json, sys
+try:
+    rels = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+tag = ""
+for r in rels:
+    if r.get("tag_name", "").endswith("-js"):
+        tag = r["tag_name"]
+        break
+if not tag:
+    sys.exit(0)
+for r in rels:
+    if r.get("tag_name") == tag:
+        for a in r.get("assets", []):
+            u = a.get("browser_download_url", "")
+            if u.endswith(".ipk") or u.endswith(".apk"):
+                print(u)
+        break
+'))
+    [[ "${#amlogic_plugin_list[@]}" -gt 0 ]] || error_msg "No luci-app-amlogic ipk found in the latest -js release."
 
     # Download the latest release assets
     for plugin_url in "${amlogic_plugin_list[@]}"; do
-        curl -fsSOJL "${plugin_url}"
-        [[ "${?}" -eq "0" ]] && echo -e "${INFO} The [ ${plugin_url} ] is downloaded successfully."
+        curl -fsSL --retry 3 --retry-delay 3 -OJ "${plugin_url}" \
+            && echo -e "${INFO} The [ ${plugin_url} ] is downloaded successfully." \
+            || echo -e "${WARNING} Failed to download [ ${plugin_url} ]."
     done
 
     # Download other luci-app-xxx
@@ -176,6 +209,12 @@ custom_packages() {
     else
         echo -e "${INFO} OPKG-based ImageBuilder detected. Removing .apk files..."
         rm -f *.apk
+        # 这三个包在 PACKAGES 里是裸包名，必须能从本地 packages 索引解析到，
+        # 否则 opkg 会报 Unknown package 并在 last second 让整个构建失败。
+        for required_ipk in luci-app-amlogic luci-i18n-amlogic-zh-cn; do
+            compgen -G "${required_ipk}_*.ipk" >/dev/null \
+                || error_msg "Missing local ipk for [ ${required_ipk} ] - amlogic plugin download failed."
+        done
     fi
 
     sync && sleep 3

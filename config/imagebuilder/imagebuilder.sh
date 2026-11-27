@@ -41,7 +41,9 @@
 make_path="${PWD}"
 openwrt_dir="imagebuilder"
 imagebuilder_path="${make_path}/${openwrt_dir}"
-custom_files_path="${make_path}/config/imagebuilder/files"
+# N1 预置文件放在仓库根目录 files/；兼容旧路径 config/imagebuilder/files
+custom_files_path="${make_path}/files"
+[[ -d "${custom_files_path}" ]] || custom_files_path="${make_path}/config/imagebuilder/files"
 custom_config_file="${make_path}/config/imagebuilder/config"
 output_path="${make_path}/output"
 tmp_path="${imagebuilder_path}/tmp"
@@ -73,12 +75,31 @@ download_imagebuilder() {
     else
         download_url="downloads.openwrt.org"
     fi
-    download_file="https://${download_url}/releases/${op_branch}/targets/armsr/armv8/${op_sourse}-imagebuilder-${op_branch}-armsr-armv8.Linux-x86_64.tar.zst"
-    curl -fsSOL ${download_file}
-    [[ "${?}" -eq "0" ]] || error_msg "Failed to download: [ ${download_file} ]"
+
+    # 23.05.x 发布的是 .tar.xz，24.10/25.12 是 .tar.zst，按存在性自动选择
+    base_url="https://${download_url}/releases/${op_branch}/targets/armsr/armv8/${op_sourse}-imagebuilder-${op_branch}-armsr-armv8.Linux-x86_64.tar"
+    archive=""
+    for ext in zst xz; do
+        url="${base_url}.${ext}"
+        if curl -fsIL --max-time 60 "${url}" >/dev/null 2>&1; then
+            echo -e "${INFO} Found ImageBuilder: [ ${url} ]"
+            curl -fsSLO --retry 3 --retry-delay 5 "${url}"
+            [[ "${?}" -eq "0" ]] || error_msg "Failed to download: [ ${url} ]"
+            archive="$(ls -1 ./*-imagebuilder-*.tar.${ext} 2>/dev/null | head -n1)"
+            [[ -f "${archive}" ]] || error_msg "Downloaded file not found: [ ${url} ]"
+            break
+        fi
+    done
+    [[ -n "${archive}" ]] || error_msg "No ImageBuilder found: [ ${base_url}.zst / ${base_url}.xz ]"
 
     # Unzip and change the directory name
-    tar -I zstd -xvf *-imagebuilder-*.tar.zst -C . && sync && rm -f *-imagebuilder-*.tar.zst
+    case "${archive}" in
+        *.tar.zst) tar -I zstd -xvf "${archive}" -C . ;;
+        *.tar.xz)  tar -I xz -xvf "${archive}" -C . ;;
+        *)         tar -xvf "${archive}" -C . ;;
+    esac
+    [[ "${?}" -eq "0" ]] || error_msg "Failed to extract: [ ${archive} ]"
+    rm -f "${archive}"
     mv -f *-imagebuilder-* ${openwrt_dir}
 
     sync && sleep 3
@@ -166,9 +187,51 @@ custom_config() {
     cd ${imagebuilder_path}
     echo -e "${STEPS} Loading custom package configuration..."
 
+    config_src="${custom_config_file}"
+
+    # 23.05 里 luci-app-package-manager 仍叫 luci-app-opkg；
+    # 同时补上外接硬盘 / SMB 共享需要的包，保持 N1 各版本功能一致。
+    if [[ "${op_branch}" =~ ^23\.05\. ]]; then
+        config_src="${imagebuilder_path}/config.n1-23.05"
+        sed -e 's/^CONFIG_PACKAGE_luci-app-package-manager=y$/CONFIG_PACKAGE_luci-app-opkg=y/' \
+            -e 's/^CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y$/CONFIG_PACKAGE_luci-i18n-opkg-zh-cn=y/' \
+            "${custom_config_file}" > "${config_src}"
+        cat >>"${config_src}" <<'EOF'
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb-storage-uas=y
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
+CONFIG_PACKAGE_kmod-fs-exfat=y
+CONFIG_PACKAGE_kmod-fs-f2fs=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_ntfs-3g=y
+CONFIG_PACKAGE_hd-idle=y
+CONFIG_PACKAGE_samba4-server=y
+CONFIG_PACKAGE_luci-app-samba4=y
+CONFIG_PACKAGE_wsdd2=y
+EOF
+        echo -e "${INFO} 23.05 detected: package-manager -> opkg, N1 storage/SMB packages appended."
+    elif [[ "${op_branch}" =~ ^24\.10\. ]]; then
+        config_src="${imagebuilder_path}/config.n1-24.10"
+        cp -f "${custom_config_file}" "${config_src}"
+        cat >>"${config_src}" <<'EOF'
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb-storage-uas=y
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
+CONFIG_PACKAGE_kmod-fs-exfat=y
+CONFIG_PACKAGE_kmod-fs-f2fs=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_ntfs-3g=y
+CONFIG_PACKAGE_hd-idle=y
+CONFIG_PACKAGE_samba4-server=y
+CONFIG_PACKAGE_luci-app-samba4=y
+CONFIG_PACKAGE_wsdd2=y
+EOF
+        echo -e "${INFO} 24.10 detected: N1 storage/SMB packages appended."
+    fi
+
     config_list=""
-    if [[ -s "${custom_config_file}" ]]; then
-        config_list="$(sed -n 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/p' "${custom_config_file}" | tr '\n' ' ')"
+    if [[ -s "${config_src}" ]]; then
+        config_list="$(sed -n 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/p' "${config_src}" | tr '\n' ' ')"
         echo -e "${INFO} Custom package list: \n$(echo "${config_list}" | tr ' ' '\n')"
     else
         echo -e "${INFO} No custom configuration file found, skipped."

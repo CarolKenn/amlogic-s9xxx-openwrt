@@ -286,10 +286,10 @@ rebuild_firmware() {
         "
 
     # Rebuild firmware
-    # 23.05.x 的 ImageBuilder 在部分 runner 上会把 staging_dir 里的 BusyBox install
-    # 当成 GNU install，prereq 检查报 "Please install GNU 'install'"；官方提供
-    # FORCE=1 跳过该检查（依赖已由 init 步骤安装，安全可绕过）。
-    make image FORCE=1 PROFILE="" PACKAGES="${my_packages}" FILES="files"
+    # 23.05.x 的 ImageBuilder 前置检查会把 staging_dir 里的 BusyBox install
+    # 当成 GNU install。image 目标内部会 `unset MAKEFLAGS` 再起子 make，
+    # 所以必须导出成环境变量 FORCE=1 才能传进子 make；写在 make 参数里无效。
+    FORCE=1 make image PROFILE="" PACKAGES="${my_packages}" FILES="files"
     [[ "${?}" -eq 0 ]] || error_msg "ImageBuilder make image failed."
 
     sync && sleep 3

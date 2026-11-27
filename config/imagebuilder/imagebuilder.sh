@@ -286,7 +286,11 @@ rebuild_firmware() {
         "
 
     # Rebuild firmware
-    make image PROFILE="" PACKAGES="${my_packages}" FILES="files"
+    # 23.05.x 的 ImageBuilder 在部分 runner 上会把 staging_dir 里的 BusyBox install
+    # 当成 GNU install，prereq 检查报 "Please install GNU 'install'"；官方提供
+    # FORCE=1 跳过该检查（依赖已由 init 步骤安装，安全可绕过）。
+    make image FORCE=1 PROFILE="" PACKAGES="${my_packages}" FILES="files"
+    [[ "${?}" -eq 0 ]] || error_msg "ImageBuilder make image failed."
 
     sync && sleep 3
     echo -e "${INFO} [ ${openwrt_dir}/bin/targets/*/*/ ] directory contents: \n$(ls -lh bin/targets/*/*/ 2>/dev/null)"

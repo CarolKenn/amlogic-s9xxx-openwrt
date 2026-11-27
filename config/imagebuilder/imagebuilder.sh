@@ -262,13 +262,25 @@ rebuild_firmware() {
     cd ${imagebuilder_path}
     echo -e "${STEPS} Building OpenWrt firmware with Image Builder..."
 
+    # 这两个库在不同分支改过名，写死会让 ImageBuilder 报 "Package X is not available"：
+    #   23.05.x: libjson-script20230523 / liblucihttp0
+    #   24.10.x: libjson-script20240329 / liblucihttp0
+    # 注意 liblucihttp-lua 另列在下面，不能整串替换 liblucihttp。
+    if [[ "${op_branch}" =~ ^23\.05\. ]]; then
+        libjson_pkg="libjson-script20230523"
+    elif [[ "${op_branch}" =~ ^24\.10\. ]]; then
+        libjson_pkg="libjson-script20240329"
+    else
+        libjson_pkg="libjson-script"
+    fi
+
     # Selecting default packages, lib, theme, app and i18n, etc.
     my_packages="\
         acpid attr base-files bash bc blkid block-mount blockd bsdtar btrfs-progs busybox bzip2 \
         cgi-io chattr comgt comgt-ncm containerd coremark coreutils coreutils-base64 coreutils-nohup \
         coreutils-truncate curl docker docker-compose dockerd dosfstools dumpe2fs e2freefrag e2fsprogs \
         exfat-mkfs f2fs-tools f2fsck fdisk gawk getopt git gzip hostapd-common iconv iw iwinfo jq \
-        jshn kmod-brcmfmac kmod-brcmutil kmod-cfg80211 kmod-mac80211 libjson-script liblucihttp \
+        jshn kmod-brcmfmac kmod-brcmutil kmod-cfg80211 kmod-mac80211 ${libjson_pkg} liblucihttp0 \
         liblucihttp-lua losetup lsattr lsblk lscpu mkf2fs mount-utils openssl-util parted \
         perl-http-date perlbase-file perlbase-getopt perlbase-time perlbase-unicode perlbase-utf8 \
         pigz ppp ppp-mod-pppoe pv rename resize2fs runc tar tini ttyd tune2fs \
